@@ -1,10 +1,12 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AiResponse } from "@/lib/ai-intent";
 import { fmtYER, fmtNum } from "@/lib/pricing";
-import { AlertTriangle, CheckCircle2, XCircle, Droplets, Zap, TrendingUp, Wallet, Smartphone, CircleDollarSign, User, Phone, MapPin, Download } from "lucide-react";
+import { AlertTriangle, CheckCircle2, XCircle, Droplets, Zap, TrendingUp, Wallet, Smartphone, CircleDollarSign, User, Phone, MapPin, Download, Printer, Droplet, Activity } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from "recharts";
+import { MizanAiIcon } from "@/components/mizan-ai-icon";
 
 interface Props {
   response: AiResponse;
@@ -69,6 +71,10 @@ export function AiResponseRenderer({ response, onSuggestion }: Props) {
         </CardContent>
       </Card>
     );
+  }
+
+  if (response.kind === "account_statement") {
+    return <AccountStatementCard response={response} onSuggestion={onSuggestion} />;
   }
 
   if (response.kind === "loss_analysis") {
@@ -215,4 +221,327 @@ function LossCard({ label, pct, loss, icon }: { label: string; pct: number; loss
       <div className="text-[11px] text-muted-foreground">{fmtNum(loss)} وحدة فاقد</div>
     </div>
   );
+}
+
+// ─── Account Statement Card ──────────────────────────────────────────
+function AccountStatementCard({
+  response,
+  onSuggestion,
+}: {
+  response: Extract<AiResponse, { kind: "account_statement" }>;
+  onSuggestion: (q: string) => void;
+}) {
+  if (response.kind !== "account_statement") return null;
+  const { customer, totals, lastReading, bills, payments } = response;
+
+  const statusLabel = (s: string) =>
+    s === "paid" ? "مدفوعة" : s === "partial" ? "جزئية" : "غير مدفوعة";
+  const statusVariant = (s: string): "default" | "secondary" | "destructive" =>
+    s === "paid" ? "default" : s === "partial" ? "secondary" : "destructive";
+  const payStatusLabel = (s: string) =>
+    s === "approved" ? "معتمدة" : s === "pending" ? "معلقة" : "مرفوضة";
+  const payStatusVariant = (s: string): "default" | "secondary" | "destructive" =>
+    s === "approved" ? "default" : s === "pending" ? "secondary" : "destructive";
+  const methodLabel = (m: string) =>
+    m === "cash" ? "نقدي" : m === "wallet" ? "الكريمي" : "تحويل";
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <MizanAiIcon size={28} />
+          <div>
+            <h3 className="text-base font-bold">كشف حساب المشترك</h3>
+            <p className="text-[11px] text-muted-foreground">{customer.name}</p>
+          </div>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => exportStatementPDF(response)}>
+          <Printer className="w-3.5 h-3.5 ms-1" /> طباعة كشف الحساب PDF
+        </Button>
+      </div>
+
+      {/* Customer info */}
+      <Card>
+        <CardContent className="p-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div className="flex items-center gap-1.5">
+              <User className="w-3.5 h-3.5 text-muted-foreground" />
+              <div>
+                <div className="text-muted-foreground">الاسم</div>
+                <div className="font-semibold">{customer.name}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Droplets className="w-3.5 h-3.5 text-muted-foreground" />
+              <div>
+                <div className="text-muted-foreground">العداد</div>
+                <div className="font-mono font-semibold">{customer.meterNumber ?? "—"}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Phone className="w-3.5 h-3.5 text-muted-foreground" />
+              <div>
+                <div className="text-muted-foreground">الهاتف</div>
+                <div className="font-mono" dir="ltr">{customer.phone}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-muted-foreground" />
+              <div>
+                <div className="text-muted-foreground">الحالة</div>
+                <Badge variant={customer.status === "active" ? "default" : "destructive"} className="text-[10px]">
+                  {customer.status === "active" ? "نشط" : "متوقف"}
+                </Badge>
+              </div>
+            </div>
+          </div>
+          {customer.directorate && (
+            <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
+              <MapPin className="w-3 h-3" /> {customer.directorate}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Summary */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <StatBox label="إجمالي الفواتير" value={fmtYER(totals.billed)} icon={<TrendingUp className="w-3 h-3" />} />
+        <StatBox label="المدفوع" value={fmtYER(totals.paid)} tone="ok" icon={<CheckCircle2 className="w-3 h-3" />} />
+        <StatBox label="المتأخرات" value={fmtYER(totals.arrears)} tone="danger" icon={<AlertTriangle className="w-3 h-3" />} />
+        <StatBox label="الرصيد الحالي" value={fmtYER(totals.balance)} tone={totals.balance > 0 ? "danger" : "ok"} icon={<Wallet className="w-3 h-3" />} />
+      </div>
+
+      {/* Last reading */}
+      {lastReading && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="text-xs font-semibold mb-2 flex items-center gap-1">
+              <Droplet className="w-3.5 h-3.5 text-water" /> آخر قراءة
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div>
+                <div className="text-muted-foreground">التاريخ</div>
+                <div className="font-semibold">{new Date(lastReading.date).toLocaleDateString("ar-EG")}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">القراءة الحالية</div>
+                <div className="font-semibold">{fmtNum(lastReading.current)}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">الاستهلاك</div>
+                <div className="font-semibold">{fmtNum(lastReading.consumption)} م³</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bills table */}
+      <Card>
+        <CardContent className="p-3">
+          <div className="text-xs font-semibold mb-2">سجل الفواتير ({bills.length})</div>
+          {bills.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-3">لا توجد فواتير.</p>
+          ) : (
+            <div className="overflow-auto max-h-48">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-right text-[10px] h-7">التاريخ</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">رقم الفاتورة</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">الاستهلاك</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">المبلغ</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">المدفوع</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">الحالة</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {bills.map((b) => (
+                    <TableRow key={b.id}>
+                      <TableCell className="text-[10px] py-1">{new Date(b.date).toLocaleDateString("ar-EG")}</TableCell>
+                      <TableCell className="font-mono text-[10px] py-1">{b.serial}</TableCell>
+                      <TableCell className="text-[10px] py-1">{fmtNum(b.consumption)} م³</TableCell>
+                      <TableCell className="text-[10px] font-semibold py-1">{fmtYER(b.total)}</TableCell>
+                      <TableCell className="text-[10px] py-1">{fmtYER(b.paid)}</TableCell>
+                      <TableCell className="py-1">
+                        <Badge variant={statusVariant(b.status)} className="text-[9px]">{statusLabel(b.status)}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Payments table */}
+      <Card>
+        <CardContent className="p-3">
+          <div className="text-xs font-semibold mb-2">سجل الدفعات ({payments.length})</div>
+          {payments.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-3">لا توجد دفعات.</p>
+          ) : (
+            <div className="overflow-auto max-h-48">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-right text-[10px] h-7">التاريخ</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">المبلغ</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">الطريقة</TableHead>
+                    <TableHead className="text-right text-[10px] h-7">الحالة</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {payments.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell className="text-[10px] py-1">{new Date(p.date).toLocaleDateString("ar-EG")}</TableCell>
+                      <TableCell className="text-[10px] font-semibold py-1">{fmtYER(p.amount)}</TableCell>
+                      <TableCell className="py-1">
+                        <Badge variant={p.method === "cash" ? "outline" : "secondary"} className="text-[9px]">{methodLabel(p.method)}</Badge>
+                      </TableCell>
+                      <TableCell className="py-1">
+                        <Badge variant={payStatusVariant(p.status)} className="text-[9px]">{payStatusLabel(p.status)}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="flex gap-2 flex-wrap">
+        {(response as Extract<AiResponse, { kind: "account_statement" }>).totals.balance > 0
+          ? <Button size="sm" variant="outline" onClick={() => onSuggestion("كم المتبقي عليه؟")}>كم المتبقي عليه؟</Button>
+          : null}
+        <Button size="sm" variant="outline" onClick={() => onSuggestion("استعلام عن التحصيل اليوم")}>تقرير التحصيل</Button>
+        <Button size="sm" variant="outline" onClick={() => onSuggestion("كم إجمالي الديون؟")}>إجمالي الديون</Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── PDF Export ──────────────────────────────────────────────────────
+function exportStatementPDF(response: Extract<AiResponse, { kind: "account_statement" }>) {
+  const { customer, totals, lastReading, bills, payments } = response;
+  const now = new Date().toLocaleString("ar-EG");
+
+  const statusLabel = (s: string) => s === "paid" ? "مدفوعة" : s === "partial" ? "جزئية" : "غير مدفوعة";
+  const payStatusLabel = (s: string) => s === "approved" ? "معتمدة" : s === "pending" ? "معلقة" : "مرفوضة";
+  const methodLabel = (m: string) => m === "cash" ? "نقدي" : m === "wallet" ? "الكريمي" : "تحويل";
+
+  const billRows = bills.map((b) => `
+    <tr>
+      <td>${new Date(b.date).toLocaleDateString("ar-EG")}</td>
+      <td>${b.serial}</td>
+      <td>${fmtNum(b.consumption)} م³</td>
+      <td>${fmtYER(b.total)}</td>
+      <td>${fmtYER(b.paid)}</td>
+      <td>${statusLabel(b.status)}</td>
+    </tr>`).join("");
+
+  const paymentRows = payments.map((p) => `
+    <tr>
+      <td>${new Date(p.date).toLocaleDateString("ar-EG")}</td>
+      <td>${fmtYER(p.amount)}</td>
+      <td>${methodLabel(p.method)}</td>
+      <td>${payStatusLabel(p.status)}</td>
+    </tr>`).join("");
+
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<title>كشف حساب — ${customer.name}</title>
+<style>
+  * { font-family: "Segoe UI", Tahoma, sans-serif; }
+  body { margin: 20px; color: #1e293b; }
+  .header { text-align: center; border-bottom: 2px solid #0ea5e9; padding-bottom: 10px; margin-bottom: 16px; }
+  .header h1 { color: #0ea5e9; font-size: 22px; margin: 0; }
+  .header p { color: #64748b; font-size: 11px; margin: 2px 0 0; }
+  .report-date { text-align: left; font-size: 10px; color: #94a3b8; margin-bottom: 12px; }
+  .section { margin-bottom: 16px; }
+  .section h2 { font-size: 13px; color: #0ea5e9; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; font-size: 11px; }
+  .info-grid .label { color: #94a3b8; font-size: 10px; }
+  .info-grid .value { font-weight: 600; }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .summary-box { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; text-align: center; }
+  .summary-box .label { font-size: 10px; color: #94a3b8; }
+  .summary-box .value { font-size: 14px; font-weight: 700; margin-top: 2px; }
+  .summary-box.danger { border-color: #ef4444; background: #fef2f2; }
+  .summary-box.danger .value { color: #ef4444; }
+  .summary-box.ok { border-color: #22c55e; background: #f0fdf4; }
+  .summary-box.ok .value { color: #16a34a; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  th { background: #f1f5f9; text-align: right; padding: 4px 6px; font-size: 10px; color: #475569; }
+  td { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; }
+  .footer { margin-top: 20px; text-align: center; font-size: 9px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+  @media print { body { margin: 10px; } }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>MIZAN AI — كشف حساب مشترك</h1>
+    <p>نظام إدارة مياه — تعز، اليمن</p>
+  </div>
+  <div class="report-date">تاريخ التقرير: ${now}</div>
+
+  <div class="section">
+    <h2>بيانات المشترك</h2>
+    <div class="info-grid">
+      <div><div class="label">الاسم</div><div class="value">${customer.name}</div></div>
+      <div><div class="label">رقم العداد</div><div class="value">${customer.meterNumber ?? "—"}</div></div>
+      <div><div class="label">الهاتف</div><div class="value" dir="ltr">${customer.phone}</div></div>
+      <div><div class="label">الحالة</div><div class="value">${customer.status === "active" ? "نشط" : "متوقف"}</div></div>
+    </div>
+  </div>
+
+  <div class="summary-grid">
+    <div class="summary-box"><div class="label">إجمالي الفواتير</div><div class="value">${fmtYER(totals.billed)}</div></div>
+    <div class="summary-box ok"><div class="label">المدفوع</div><div class="value">${fmtYER(totals.paid)}</div></div>
+    <div class="summary-box danger"><div class="label">المتأخرات</div><div class="value">${fmtYER(totals.arrears)}</div></div>
+    <div class="summary-box ${totals.balance > 0 ? "danger" : "ok"}"><div class="label">الرصيد النهائي</div><div class="value">${fmtYER(totals.balance)}</div></div>
+  </div>
+
+  ${lastReading ? `
+  <div class="section">
+    <h2>آخر قراءة</h2>
+    <div class="info-grid">
+      <div><div class="label">التاريخ</div><div class="value">${new Date(lastReading.date).toLocaleDateString("ar-EG")}</div></div>
+      <div><div class="label">القراءة الحالية</div><div class="value">${fmtNum(lastReading.current)}</div></div>
+      <div><div class="label">الاستهلاك</div><div class="value">${fmtNum(lastReading.consumption)} م³</div></div>
+    </div>
+  </div>` : ""}
+
+  <div class="section">
+    <h2>سجل الفواتير (${bills.length})</h2>
+    <table>
+      <thead><tr><th>التاريخ</th><th>رقم الفاتورة</th><th>الاستهلاك</th><th>المبلغ</th><th>المدفوع</th><th>الحالة</th></tr></thead>
+      <tbody>${billRows || '<tr><td colspan="6" style="text-align:center;color:#94a3b8;">لا توجد فواتير</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>سجل الدفعات (${payments.length})</h2>
+    <table>
+      <thead><tr><th>التاريخ</th><th>المبلغ</th><th>الطريقة</th><th>الحالة</th></tr></thead>
+      <tbody>${paymentRows || '<tr><td colspan="4" style="text-align:center;color:#94a3b8;">لا توجد دفعات</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    MIZAN AI Smart Assistant — تم إنشاء هذا التقرير آلياً من بيانات النظام
+  </div>
+</body>
+</html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) return;
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 500);
 }
