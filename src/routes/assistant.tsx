@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, User, RefreshCw } from "lucide-react";
-import { answerQuestion, type AiResponse } from "@/lib/ai-intent";
+import { answerQuestion, setChatContext, type AiResponse } from "@/lib/ai-intent";
 import { AiResponseRenderer } from "@/components/ai-response";
 import { MizanAiIcon } from "@/components/mizan-ai-icon";
 import { syncPending } from "@/lib/sync";
@@ -40,6 +40,7 @@ function AssistantPage() {
   const [input, setInput] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const lastUserRef = useRef<string>("");
 
   useEffect(() => {
     if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
@@ -48,6 +49,7 @@ function AssistantPage() {
   function send(q: string) {
     const trimmed = q.trim();
     if (!trimmed) return;
+    lastUserRef.current = trimmed;
     setMessages((m) => [...m, { role: "user", text: trimmed }]);
     setInput("");
     setTimeout(() => {
@@ -61,10 +63,9 @@ function AssistantPage() {
       toast.success(synced > 0 ? `تمت مزامنة ${synced} إدخال معلّق` : "تم التحديث");
     });
     setRefreshKey((k) => k + 1);
-    // Re-run the last user question to refresh the last card
-    const lastUser = [...messages].reverse().find((m) => m.role === "user") as UserMsg | undefined;
+    const lastUser = lastUserRef.current;
     if (lastUser) {
-      const response = answerQuestion(lastUser.text);
+      const response = answerQuestion(lastUser);
       setMessages((m) => {
         const last = m[m.length - 1];
         if (last && last.role === "assistant") return [...m.slice(0, -1), { role: "assistant", response }];
