@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, User, RefreshCw } from "lucide-react";
-import { answerQuestion, setChatContext, type AiResponse } from "@/lib/ai-intent";
+import { answerQuestion, type AiResponse } from "@/lib/ai-intent";
 import { AiResponseRenderer } from "@/components/ai-response";
 import { MizanAiIcon } from "@/components/mizan-ai-icon";
 import { syncPending } from "@/lib/sync";
@@ -21,9 +21,12 @@ type Msg = UserMsg | AssistantMsg;
 
 const SUGGESTIONS = [
   "استعلام عن مشترك",
+  "كشف حساب المشترك MSR-0004",
   "تحليل الفاقد لهذا الشهر",
   "من دفع ومن لم يدفع؟",
   "استعلام عن التحصيل اليوم",
+  "كم إجمالي الديون؟",
+  "ما أكثر المشتركين تأخراً؟",
 ];
 
 function AssistantPage() {
