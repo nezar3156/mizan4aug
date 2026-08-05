@@ -23,7 +23,7 @@ export type AiResponse =
   | {
       kind: "disambiguation";
       text: string;
-      customers: Array<{ id: number; name: string; meterNumber?: string; phone: string }>;
+      customers: Array<{ id: number; name: string; meterNumber?: string; phone: string; directorate?: string; status?: string; balance?: number }>;
     }
   | {
       kind: "subscriber_ledger";
@@ -38,8 +38,10 @@ export type AiResponse =
         directorate?: string; status?: string; meterNumber?: string;
       };
       totals: { billed: number; paid: number; arrears: number; balance: number };
-      stats: { billCount: number; paidCount: number; unpaidCount: number; avgConsumption: number };
+      stats: { billCount: number; paidCount: number; unpaidCount: number; avgConsumption: number; collectionPct: number; highestBill: number; lowestBill: number };
       lastReading: { date: string; current: number; consumption: number } | null;
+      readings: Array<{ id: number; date: string; current: number; previous: number; consumption: number; status: string }>;
+      monthlyConsumption: Array<{ month: string; consumption: number }>;
       bills: Array<{ id: number; serial: string; date: string; consumption: number; total: number; paid: number; status: string; }>;
       payments: Array<{ id: number; date: string; amount: number; method: string; status: string; }>;
       timeline: Array<{ date: string; type: "reading" | "bill" | "payment"; description: string; amount?: number; }>;
@@ -61,6 +63,7 @@ export type AiResponse =
       range: { from: string; to: string; label: string };
       totals: { cash: number; bank: number; total: number; count: number; avg: number };
       series: Array<{ day: string; cash: number; bank: number; total: number }>;
+      suggestions?: string[];
     };
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -80,7 +83,8 @@ function resolveCustomer(query: string, requireContext = true): { customer: Cust
   if (result.kind === "multiple") {
     setDisambiguation(result.customers);
     const lines = result.customers.map((c, i) => { const m = s.meters.find((x) => x.customer_id === c.id); return `${i + 1}. ${c.name}${m ? ` (${m.number})` : ""} — ${c.phone}`; });
-    return { disambiguation: { kind: "disambiguation", text: `وجدت ${result.customers.length} مشتركين مطابقين:\n${lines.join("\n")}\nاختر أحدهم بكتابة رقمه.`, customers: result.customers.map((c) => { const m = s.meters.find((x) => x.customer_id === c.id); return { id: c.id, name: c.name, meterNumber: m?.number, phone: c.phone }; }) };
+    const customersData = result.customers.map((c) => { const m = s.meters.find((x) => x.customer_id === c.id); return { id: c.id, name: c.name, meterNumber: m?.number, phone: c.phone, directorate: c.directorate, status: c.status, balance: c.balance ?? 0 }; });
+    return { disambiguation: { kind: "disambiguation", text: `وجدت ${result.customers.length} مشتركين مطابقين:\n${lines.join("\n")}\nاختر أحدهم بكتابة رقمه.`, customers: customersData } };
   }
   if (requireContext) { const ctx = getContext(); if (ctx.currentCustomer) return { customer: ctx.currentCustomer }; const partial = s.customers.find((c) => query.includes(c.name.split(/\s+/)[0])); if (partial) return { customer: partial }; }
   return { none: { kind: "suggestions", text: "حدد المشترك — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) } };
@@ -104,6 +108,13 @@ function buildAccountStatement(customer: Customer): AiResponse {
   const paidCount = customerBills.filter((b) => b.status === "paid").length;
   const unpaidCount = customerBills.filter((b) => b.status !== "paid").length;
   const avgConsumption = customerReadings.length > 0 ? Math.round(customerReadings.reduce((a, r) => a + r.consumption, 0) / customerReadings.length) : 0;
+  const collectionPct = billed > 0 ? Math.round((paid / billed) * 100) : 0;
+  const highestBill = customerBills.length > 0 ? Math.max(...customerBills.map((b) => b.total)) : 0;
+  const lowestBill = customerBills.length > 0 ? Math.min(...customerBills.map((b) => b.total)) : 0;
+  const monthlyMap = new Map<string, number>();
+  customerReadings.forEach((r) => { const key = new Date(r.date).toISOString().slice(0, 7); monthlyMap.set(key, (monthlyMap.get(key) ?? 0) + r.consumption); });
+  const monthlyConsumption = [...monthlyMap.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-12).map(([month, consumption]) => ({ month: month.slice(5), consumption }));
+  const readingRows = customerReadings.slice(0, 20).map((r) => ({ id: r.id, date: r.date, current: r.current, previous: r.previous, consumption: r.consumption, status: r.status }));
   const billsRows = customerBills.map((b) => { const r = s.readings.find((x) => x.id === b.reading_id); return { id: b.id, serial: b.serial, date: b.date, consumption: r?.consumption ?? 0, total: b.total, paid: b.paid ?? 0, status: b.status }; });
   const paymentRows = customerPayments.map((p) => ({ id: p.id, date: p.date, amount: p.amount, method: p.method, status: p.status }));
   const timeline: Array<{ date: string; type: "reading" | "bill" | "payment"; description: string; amount?: number }> = [
@@ -112,13 +123,39 @@ function buildAccountStatement(customer: Customer): AiResponse {
     ...customerPayments.map((p) => ({ date: p.date, type: "payment" as const, description: `دفعة ${p.method === "cash" ? "نقدي" : p.method === "wallet" ? "الكريمي" : "تحويل"} — ${fmtYER(p.amount)}`, amount: p.amount })),
   ].sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
-  return { kind: "account_statement", customer: { id: customer.id, name: customer.name, phone: customer.phone, pay_account: customer.pay_account, directorate: customer.directorate, status: customer.status, meterNumber: meter?.number }, totals: { billed, paid, arrears, balance: customer.balance ?? arrears }, stats: { billCount, paidCount, unpaidCount, avgConsumption }, lastReading, bills: billsRows, payments: paymentRows, timeline: timeline.slice(0, 30) };
+  return { kind: "account_statement", customer: { id: customer.id, name: customer.name, phone: customer.phone, pay_account: customer.pay_account, directorate: customer.directorate, status: customer.status, meterNumber: meter?.number }, totals: { billed, paid, arrears, balance: customer.balance ?? arrears }, stats: { billCount, paidCount, unpaidCount, avgConsumption, collectionPct, highestBill, lowestBill }, lastReading, readings: readingRows, monthlyConsumption, bills: billsRows, payments: paymentRows, timeline: timeline.slice(0, 30) };
 }
 
 // ─── Intent Matching ─────────────────────────────────────────────────
 export function answerQuestion(q: string): AiResponse {
-  const s = useStore.getState();
   const text = q.trim();
+
+  // ── 0) Compound questions: split by "ثم" / "و" ────────────────────
+  if (text.includes("ثم") || (text.includes(" و ") && text.length > 15)) {
+    const parts = text.split(/\s+ثم\s+|\s+و\s+/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 2) {
+      if (parts[0].includes("أكثر") || parts[0].includes("تأخر")) {
+        const r1 = answerQuestionSingle(parts[0]);
+        if (parts[1].includes("الثاني") || parts[1].includes("ثاني")) return answerQuestionSingle(parts[1]);
+        if (parts[1].includes("الأول") || parts[1].includes("اول")) return answerQuestionSingle(parts[1]);
+        return r1;
+      }
+      const r1 = answerQuestionSingle(parts[0]);
+      const r2 = answerQuestionSingle(parts[1]);
+      const t1 = r1.kind === "text" ? r1.text : r1.kind === "suggestions" ? r1.text : "";
+      const t2 = r2.kind === "text" ? r2.text : r2.kind === "suggestions" ? r2.text : "";
+      if (t1 && t2) return { kind: "text", text: `${t1}\n\n───\n\n${t2}`, suggestions: r2.kind === "text" ? r2.suggestions : undefined };
+      if (r1.kind !== "text" && r1.kind !== "suggestions") return r1;
+      if (r2.kind !== "text" && r2.kind !== "suggestions") return r2;
+      return r1;
+    }
+  }
+
+  return answerQuestionSingle(text);
+}
+
+function answerQuestionSingle(text: string): AiResponse {
+  const s = useStore.getState();
   const has = (...kws: string[]) => kws.some((k) => text.includes(k));
   const ctx = getContext();
 
@@ -182,6 +219,34 @@ export function answerQuestion(q: string): AiResponse {
     const lastBill = bills[bills.length - 1]; const r = s.readings.find((x) => x.id === lastBill.reading_id); setContext({ currentBill: lastBill });
     return { kind: "text", text: `آخر فاتورة لـ ${ctx.currentCustomer.name}:\nرقم الفاتورة: ${lastBill.serial}\nالتاريخ: ${new Date(lastBill.date).toLocaleDateString("ar-EG")}\nالاستهلاك: ${fmtNum(r?.consumption ?? 0)} م³\nالمبلغ: ${fmtYER(lastBill.total)}\nالحالة: ${lastBill.status === "paid" ? "مدفوعة" : lastBill.status === "partial" ? "جزئية" : "غير مدفوعة"}`, suggestions: ["كم المتبقي عليه؟", "كشف حساب المشترك", "آخر دفعة"] };
   }
+  // 1.7) Readings history
+  if (has("سجل القراءات", "قراءات", "كل القراءات", "قائمة القراءات", "عرض القراءات")) {
+    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+    const stmt = buildAccountStatement(ctx.currentCustomer);
+    if (stmt.kind === "account_statement") return { kind: "text", text: `سجل قراءات ${ctx.currentCustomer.name} (${stmt.readings.length} قراءة):\n${stmt.readings.slice(0, 10).map((r) => `${new Date(r.date).toLocaleDateString("ar-EG")}: قراءة ${fmtNum(r.current)} — استهلاك ${fmtNum(r.consumption)} م³`).join("\n")}`, suggestions: ["كشف حساب المشترك", "كم المتبقي عليه؟", "آخر فاتورة"] };
+    return { kind: "text", text: `لا توجد قراءات لـ ${ctx.currentCustomer.name}.` };
+  }
+
+  // 1.8) Top consumer
+  if (has("أعلى مستهلك", "اعلى مستهلك", "أكثر استهلاك", "اكثر استهلاك", "أكبر استهلاك", "اكبر استهلاك", "أكثر المشتركين استهلاك")) {
+    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : monthRange();
+    const byCustomer = new Map<number, number>();
+    s.readings.filter((r) => r.status !== "rejected" && +new Date(r.date) >= range.start && +new Date(r.date) < range.end).forEach((r) => { const m = s.meters.find((x) => x.id === r.meter_id); if (m) byCustomer.set(m.customer_id, (byCustomer.get(m.customer_id) ?? 0) + r.consumption); });
+    const top = [...byCustomer.entries()].map(([cid, cons]) => ({ c: s.customers.find((x) => x.id === cid), cons })).filter((x) => x.c).sort((a, b) => b.cons - a.cons).slice(0, 10);
+    if (top.length === 0) return { kind: "text", text: `لا توجد قراءات معتمدة في ${range.label}.` };
+    setDisambiguation(top.map((x) => x.c!));
+    const lines = top.map((x, i) => { const m = s.meters.find((mm) => mm.customer_id === x.c!.id); return `${i + 1}. ${x.c!.name}${m ? ` (${m.number})` : ""} — ${fmtNum(x.cons)} م³`; });
+    return { kind: "text", text: `أعلى المشتركين استهلاكاً ${range.label}:\n${lines.join("\n")}\n\nاكتب "اعرض الأول" لفتح كشف حساب صاحب أعلى استهلاك.`, suggestions: ["اعرض الأول", "تحليل الفاقد لهذا الشهر", "كم عدد المشتركين؟"] };
+  }
+
+  // 1.9) 12-month consumption comparison
+  if (has("مقارنة", "قارن", "آخر 12 شهر", "12 شهر", "استهلاك السنة", "مقارنة استهلاك", "قارن استهلاكه")) {
+    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+    const stmt = buildAccountStatement(ctx.currentCustomer);
+    if (stmt.kind === "account_statement" && stmt.monthlyConsumption.length > 0) return { kind: "text", text: `مقارنة استهلاك ${ctx.currentCustomer.name} — آخر ${stmt.monthlyConsumption.length} شهر:\n${stmt.monthlyConsumption.map((m) => `${m.month}: ${fmtNum(m.consumption)} م³`).join("\n")}`, suggestions: ["كشف حساب المشترك", "آخر قراءة؟", "طباعة كشف الحساب"] };
+    return { kind: "text", text: `لا توجد بيانات كافية لمقارنة استهلاك ${ctx.currentCustomer.name}.` };
+  }
+
   if (has("آخر دفعة", "اخر دفعة", "آخر تحصيل", "اخر تحصيل", "متى دفع", "متى آخر دفعة", "هل دفع", "دفع آخر")) {
     if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
     const bills = getCustomerBills(ctx.currentCustomer.id);
@@ -245,10 +310,11 @@ export function answerQuestion(q: string): AiResponse {
     payments.forEach((p) => { const d = iso(+new Date(p.date)); const cur = days.get(d) ?? { cash: 0, bank: 0, total: 0 }; if (p.method === "cash") cur.cash += p.amount; else if (p.method === "wallet") cur.bank += p.amount; cur.total += p.amount; days.set(d, cur); });
     const series = [...days.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, v]) => ({ day: day.slice(5), ...v }));
     setContext({ currentReport: "revenue_report" });
-    return { kind: "revenue_report", range: { from: iso(range.start), to: iso(range.end - 1), label: range.label }, totals: { cash, bank, total, count: payments.length, avg: payments.length ? total / payments.length : 0 }, series };
+    const topDebtor = [...s.customers].sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0))[0];
+    return { kind: "revenue_report", range: { from: iso(range.start), to: iso(range.end - 1), label: range.label }, totals: { cash, bank, total, count: payments.length, avg: payments.length ? total / payments.length : 0 }, series, suggestions: topDebtor ? [`أعلى مدين: ${topDebtor.name}`, "أعلى مستهلك", "تحصيل هذا الأسبوع", "تحصيل هذا الشهر"] : ["أعلى مستهلك", "تحصيل هذا الأسبوع", "تحصيل هذا الشهر"] };
   }
 
-  return { kind: "suggestions", text: "اختر استعلاماً — ميزان الذكي يدعم هذه التقارير:", suggestions: ["استعلام عن مشترك", "كشف حساب المشترك MSR-0004", "تحليل الفاقد لهذا الشهر", "من دفع ومن لم يدفع؟", "استعلام عن التحصيل اليوم", "كم عدد المشتركين؟", "كم إجمالي الديون؟", "ما أكثر المشتركين تأخراً؟"] };
+  return { kind: "suggestions", text: "اختر استعلاماً — ميزان الذكي يدعم هذه التقارير:", suggestions: ["استعلام عن مشترك", "كشف حساب المشترك MSR-0004", "تحليل الفاقد لهذا الشهر", "من دفع ومن لم يدفع؟", "استعلام عن التحصيل اليوم", "كم عدد المشتركين؟", "كم إجمالي الديون؟", "ما أكثر المشتركين تأخراً؟", "أعلى مستهلك", "سجل القراءات"] };
 }
 
 export { fmtYER, fmtNum };
