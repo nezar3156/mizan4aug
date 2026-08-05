@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AiResponse } from "@/lib/ai-intent";
 import { fmtYER, fmtNum } from "@/lib/pricing";
-import { AlertTriangle, CheckCircle2, XCircle, Droplets, Zap, TrendingUp, Wallet, Smartphone, CircleDollarSign, User, Phone, MapPin, Download, Printer, Droplet, Activity, FileText, Calendar, Receipt, CreditCard, BarChart3, ListOrdered } from "lucide-react";
+import { AlertTriangle, CheckCircle2, XCircle, Droplets, Zap, TrendingUp, Wallet, Smartphone, CircleDollarSign, User, Phone, MapPin, Download, Printer, Droplet, Activity, FileText, Calendar, Receipt, CreditCard, BarChart3, ListOrdered, HelpCircle, ChevronLeft } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from "recharts";
 import { MizanAiIcon } from "@/components/mizan-ai-icon";
 import { exportStatementPDF } from "@/lib/assistant/pdf-export";
@@ -55,6 +55,26 @@ export function AiResponseRenderer({ response, onSuggestion }: Props) {
     );
   }
 
+  // ── Clarification card (interactive disambiguation) ──────────────
+  if (response.kind === "clarification") {
+    return (
+      <Card className="border-sky-500/30 bg-sky-500/5">
+        <CardContent className="p-4 space-y-3">
+          <div className="text-sm font-semibold flex items-center gap-1.5 text-sky-700"><HelpCircle className="w-4 h-4" /> {response.text}</div>
+          <div className="grid sm:grid-cols-1 gap-2">
+            {response.options.map((opt, i) => (
+              <button key={i} onClick={() => onSuggestion(opt.query)} className="text-right flex items-center gap-2 p-3 rounded-lg border bg-background hover:border-primary/40 hover:bg-primary/5 transition-colors">
+                <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold grid place-items-center shrink-0">{i + 1}</span>
+                <span className="text-sm font-medium flex-1">{opt.label}</span>
+                <ChevronLeft className="w-4 h-4 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (response.kind === "subscriber_ledger") {
     const { customer, totals, series } = response;
     return (
@@ -79,6 +99,7 @@ export function AiResponseRenderer({ response, onSuggestion }: Props) {
       <div className="grid grid-cols-2 gap-2"><LossCard label="فاقد المياه" pct={response.water.pct} loss={response.water.loss} icon={<Droplets className="w-4 h-4 text-water" />} /><LossCard label="فاقد الكهرباء" pct={response.electric.pct} loss={response.electric.loss} icon={<Zap className="w-4 h-4 text-electric" />} /></div>
       <div className="h-44"><ResponsiveContainer width="100%" height="100%"><BarChart data={chart}><CartesianGrid strokeDasharray="3 3" opacity={0.2} /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} /><Tooltip formatter={(v: number) => fmtNum(v)} /><Legend /><Bar dataKey="produced" name="مُنتج" fill="var(--water)" /><Bar dataKey="consumed" name="مُستهلَك" fill="var(--electric-2)" /><Bar dataKey="loss" name="فاقد" fill="#dc2626" /></BarChart></ResponsiveContainer></div>
       {response.alerts.length > 0 && (<div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 space-y-1">{response.alerts.map((a) => (<div key={a} className="flex items-start gap-2 text-xs"><AlertTriangle className="w-4 h-4 text-destructive mt-0.5 shrink-0" /><span>{a}</span></div>))}</div>)}
+      <div className="flex gap-1.5 flex-wrap pt-1"><Button size="sm" variant="outline" onClick={() => onSuggestion("تحليل الفاقد اليوم")}>اليوم</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("تحليل الفاقد هذا الأسبوع")}>الأسبوع</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("تحليل الفاقد لهذا الشهر")}>الشهر</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("كم إنتاج المياه؟")}>إنتاج المياه</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("كم عدد المشتركين؟")}>عدد المشتركين</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("من دفع ومن لم يدفع؟")}>حالة الدفع</Button></div>
     </CardContent></Card>);
   }
 
@@ -91,6 +112,7 @@ export function AiResponseRenderer({ response, onSuggestion }: Props) {
       <Card className="border-destructive/30 bg-destructive/5"><CardContent className="p-4 space-y-2"><div className="flex items-center justify-between"><div className="text-sm font-bold flex items-center gap-1.5 text-destructive"><XCircle className="w-4 h-4" /> غير مدفوعة ({response.unpaid.length})</div><Button size="sm" variant="ghost" onClick={() => exportCsv(response.unpaid, "unpaid")}><Download className="w-3 h-3 ms-1" /> CSV</Button></div>
         <ul className="text-xs space-y-1 max-h-56 overflow-auto">{response.unpaid.map((p) => (<li key={p.id} className="flex justify-between border-b pb-1"><span className="font-mono text-[10px]">{p.serial}</span><span className="flex-1 mx-2 truncate">{p.name}</span><span className="font-semibold">{fmtYER(p.balance)}</span></li>))}{response.unpaid.length === 0 && <li className="text-muted-foreground text-center py-4">لا توجد</li>}</ul>
       </CardContent></Card>
+      <div className="md:col-span-2 flex gap-1.5 flex-wrap"><Button size="sm" variant="outline" onClick={() => onSuggestion("ما أكثر المشتركين تأخراً؟")}>أكثر المتأخرين</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("كم إجمالي الديون؟")}>إجمالي الديون</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("استعلام عن التحصيل اليوم")}>تقرير التحصيل</Button><Button size="sm" variant="outline" onClick={() => onSuggestion("أعلى مستهلك")}>أعلى مستهلك</Button></div>
     </div>);
   }
 
