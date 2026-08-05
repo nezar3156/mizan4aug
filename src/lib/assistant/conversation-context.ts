@@ -17,6 +17,10 @@ export interface ConversationContext {
   currentReport: "account_statement" | "subscriber_ledger" | "loss_analysis" | "revenue_report" | "payment_status" | null;
   /** Last disambiguation list — for "اعرض أول واحد" */
   lastDisambiguation: Customer[] | null;
+  /** Last ranking list (e.g. top debtors, top consumers) — for "اعرض الثاني/الثالث" */
+  currentRanking: Customer[] | null;
+  /** Last time range label used in a report — for context-aware follow-ups */
+  currentTimeRange: string | null;
 }
 
 let ctx: ConversationContext = {
@@ -26,6 +30,8 @@ let ctx: ConversationContext = {
   currentReading: null,
   currentReport: null,
   lastDisambiguation: null,
+  currentRanking: null,
+  currentTimeRange: null,
 };
 
 export function setContext(c: Partial<ConversationContext>) {
@@ -40,6 +46,8 @@ export function resetContext() {
     currentReading: null,
     currentReport: null,
     lastDisambiguation: null,
+    currentRanking: null,
+    currentTimeRange: null,
   };
 }
 

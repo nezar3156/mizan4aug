@@ -8,6 +8,7 @@ import { answerQuestion, type AiResponse } from "@/lib/ai-intent";
 import { AiResponseRenderer } from "@/components/ai-response";
 import { MizanAiIcon } from "@/components/mizan-ai-icon";
 import { syncPending } from "@/lib/sync";
+import { getContext } from "@/lib/assistant/conversation-context";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/assistant")({
@@ -19,7 +20,7 @@ interface UserMsg { role: "user"; text: string }
 interface AssistantMsg { role: "assistant"; response: AiResponse }
 type Msg = UserMsg | AssistantMsg;
 
-const SUGGESTIONS = [
+const DEFAULT_SUGGESTIONS = [
   "استعلام عن مشترك",
   "كشف حساب المشترك MSR-0004",
   "تحليل الفاقد لهذا الشهر",
@@ -27,7 +28,34 @@ const SUGGESTIONS = [
   "استعلام عن التحصيل اليوم",
   "كم إجمالي الديون؟",
   "ما أكثر المشتركين تأخراً؟",
+  "أعلى مستهلك",
 ];
+
+function getContextualSuggestions(): string[] {
+  const ctx = getContext();
+  if (ctx.currentCustomer) {
+    return [
+      "كشف حساب المشترك",
+      "كم المتبقي عليه؟",
+      "آخر فاتورة",
+      "آخر دفعة",
+      "آخر قراءة؟",
+      "سجل القراءات",
+      "قارن استهلاكه",
+      "هل دفع آخر فاتورة؟",
+    ];
+  }
+  if (ctx.currentReport === "revenue_report") {
+    return ["تحصيل اليوم", "تحصيل هذا الأسبوع", "تحصيل هذا الشهر", "أعلى مدين", "أعلى مستهلك"];
+  }
+  if (ctx.currentReport === "loss_analysis") {
+    return ["تحليل الفاقد اليوم", "تحليل الفاقد هذا الأسبوع", "كم إنتاج المياه؟", "كم عدد المشتركين؟"];
+  }
+  if (ctx.currentReport === "payment_status") {
+    return ["كم إجمالي الديون؟", "ما أكثر المشتركين تأخراً؟", "استعلام عن التحصيل اليوم"];
+  }
+  return DEFAULT_SUGGESTIONS;
+}
 
 function AssistantPage() {
   const [messages, setMessages] = useState<Msg[]>([
@@ -36,7 +64,7 @@ function AssistantPage() {
       response: {
         kind: "suggestions",
         text: "أهلاً بك في «ميزان الذكي» — مستشارك الرقمي لتحليل الشبكة واتخاذ القرارات. اختر تقريراً أو اطرح سؤالاً:",
-        suggestions: SUGGESTIONS,
+        suggestions: getContextualSuggestions(),
       },
     },
   ]);
@@ -111,7 +139,7 @@ function AssistantPage() {
         </CardContent>
         <div className="border-t p-3 space-y-2">
           <div className="flex flex-wrap gap-1.5">
-            {SUGGESTIONS.map((s) => (
+            {getContextualSuggestions().map((s) => (
               <button key={s} onClick={() => send(s)} className="text-xs px-2.5 py-1 rounded-full border hover:bg-primary/10 hover:border-primary/40 transition-colors">
                 {s}
               </button>

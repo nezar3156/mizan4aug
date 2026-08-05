@@ -4,8 +4,9 @@ import type { AiResponse } from "../ai-intent";
 
 /**
  * Professional PDF export for account statements using jsPDF.
- * Includes: MIZAN AI logo header, customer data, bills table,
- * payments table, final balance, QR code, issue date, footer.
+ * Includes: MIZAN AI logo header, customer data, stats, readings table,
+ * monthly consumption, bills table, payments table, final balance,
+ * QR code, issue date, footer.
  *
  * All data comes from the existing response — no new calculations.
  */
@@ -31,7 +32,7 @@ function methodLabel(m: string): string {
 }
 
 export async function exportStatementPDF(response: StatementResponse): Promise<void> {
-  const { customer, totals, lastReading, bills, payments } = response;
+  const { customer, totals, stats, lastReading, readings, monthlyConsumption, bills, payments } = response;
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
@@ -105,6 +106,30 @@ export async function exportStatementPDF(response: StatementResponse): Promise<v
   });
   y += boxH + 5;
 
+  // ── Stats row ─────────────────────────────────────────────────
+  if (stats) {
+    const statBoxes: Array<{ label: string; value: string; color: [number, number, number] }> = [
+      { label: "Bills", value: String(stats.billCount), color: DARK },
+      { label: "Collection %", value: stats.collectionPct + "%", color: stats.collectionPct >= 70 ? OK : DANGER },
+      { label: "Highest Bill", value: fmtYERShort(stats.highestBill), color: DARK },
+      { label: "Lowest Bill", value: fmtYERShort(stats.lowestBill), color: DARK },
+    ];
+    statBoxes.forEach((st, i) => {
+      const x = margin + i * (boxW + 3);
+      doc.setFillColor(...LIGHT);
+      doc.roundedRect(x, y, boxW, boxH, 1.5, 1.5, "F");
+      doc.setTextColor(...MUTED);
+      doc.setFontSize(7);
+      doc.text(st.label, x + 2, y + 5);
+      doc.setTextColor(...st.color);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.text(st.value, x + 2, y + 11);
+      doc.setFont("helvetica", "normal");
+    });
+    y += boxH + 5;
+  }
+
   if (lastReading) {
     doc.setTextColor(...PRIMARY);
     doc.setFontSize(10);
@@ -119,6 +144,39 @@ export async function exportStatementPDF(response: StatementResponse): Promise<v
     doc.text(`Current: ${lastReading.current}`, margin + 55, y);
     doc.text(`Consumption: ${lastReading.consumption} m3`, margin + 100, y);
     y += 6;
+  }
+
+  // ── Readings table ─────────────────────────────────────────────
+  if (readings && readings.length > 0) {
+    y = drawTable(doc, margin, y, pageW - margin * 2, "Readings History",
+      ["Date", "Previous", "Current", "Consumption", "Status"],
+      readings.slice(0, 20).map((r) => [
+        new Date(r.date).toLocaleDateString("en-GB"),
+        String(r.previous), String(r.current),
+        String(r.consumption) + " m3",
+        r.status === "approved" ? "Approved" : r.status === "rejected" ? "Rejected" : "Pending",
+      ]),
+      pageH);
+  }
+
+  // ── Monthly consumption ─────────────────────────────────────────
+  if (monthlyConsumption && monthlyConsumption.length > 0) {
+    if (y > pageH - 25) { doc.addPage(); y = margin; }
+    doc.setTextColor(...PRIMARY);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("Monthly Consumption (Last 12 months)", margin, y);
+    y += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...DARK);
+    const colW = (pageW - margin * 2) / Math.min(monthlyConsumption.length, 12);
+    monthlyConsumption.slice(0, 12).forEach((m, i) => {
+      const x = margin + i * colW;
+      doc.text(m.month, x + 1, y);
+      doc.text(String(m.consumption), x + 1, y + 4);
+    });
+    y += 10;
   }
 
   y = drawTable(doc, margin, y, pageW - margin * 2, "Bills History",
