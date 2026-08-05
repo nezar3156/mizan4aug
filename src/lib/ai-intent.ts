@@ -178,8 +178,12 @@ function answerQuestionSingle(text: string): AiResponse {
     return { kind: "text", text: "لا يوجد مشترك محدد حالياً — استعلم عن مشترك أولاً." };
   }
 
-  // 0d) "اعرض اول واحد" after debt ranking
-  if (has("اعرض اول", "اعرض الأول", "افتح اول", "افتح الأول", "عرض الاول") && ctx.lastDisambiguation && ctx.lastDisambiguation.length > 0) { const c = ctx.lastDisambiguation[0]; setContext({ lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
+  // 0d) "اعرض اول واحد" after a debt ranking — works with both lastDisambiguation and currentRanking
+  if (has("اعرض اول", "اعرض الأول", "افتح اول", "افتح الأول", "عرض الاول") && ((ctx.currentRanking && ctx.currentRanking.length > 0) || (ctx.lastDisambiguation && ctx.lastDisambiguation.length > 0))) { const list = ctx.currentRanking ?? ctx.lastDisambiguation!; const c = list[0]; setContext({ currentRanking: null, lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
+  if (has("اعرض الثاني", "افتح الثاني") && ((ctx.currentRanking && ctx.currentRanking.length > 1) || (ctx.lastDisambiguation && ctx.lastDisambiguation.length > 1))) { const list = ctx.currentRanking ?? ctx.lastDisambiguation!; const c = list[1]; setContext({ currentRanking: null, lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
+  if (has("اعرض الثالث", "افتح الثالث") && ((ctx.currentRanking && ctx.currentRanking.length > 2) || (ctx.lastDisambiguation && ctx.lastDisambiguation.length > 2))) { const list = ctx.currentRanking ?? ctx.lastDisambiguation!; const c = list[2]; setContext({ currentRanking: null, lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
+  if (has("اعرض الرابع", "افتح الرابع") && ((ctx.currentRanking && ctx.currentRanking.length > 3) || (ctx.lastDisambiguation && ctx.lastDisambiguation.length > 3))) { const list = ctx.currentRanking ?? ctx.lastDisambiguation!; const c = list[3]; setContext({ currentRanking: null, lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
+  if (has("اعرض الخامس", "افتح الخامس") && ((ctx.currentRanking && ctx.currentRanking.length > 4) || (ctx.lastDisambiguation && ctx.lastDisambiguation.length > 4))) { const list = ctx.currentRanking ?? ctx.lastDisambiguation!; const c = list[4]; setContext({ currentRanking: null, lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
 
   // 1) Summary stats
   if (has("عدد المشترك", "كم عدد", "كم المشترك", "عدد المشتركين")) { const count = s.counts.customers || s.customers.length; const active = s.customers.filter((c) => c.status === "active").length; return { kind: "text", text: `عدد المشتركين الإجمالي: ${fmtNum(count)} مشترك، منهم ${fmtNum(active)} نشط.`, suggestions: ["كم إجمالي الديون؟", "ما أكثر المشتركين تأخراً؟", "كم تم تحصيله هذا الشهر؟"] }; }
@@ -188,6 +192,7 @@ function answerQuestionSingle(text: string): AiResponse {
     const top = [...s.customers].filter((c) => (c.balance ?? 0) > 0).sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0)).slice(0, 10);
     if (top.length === 0) return { kind: "text", text: "لا توجد متأخرات حالياً — جميع المشتركين سددوا مستحقاتهم." };
     setDisambiguation(top);
+    setContext({ currentRanking: top, currentTimeRange: null });
     const lines = top.map((c, i) => { const m = s.meters.find((x) => x.customer_id === c.id); return `${i + 1}. ${c.name}${m ? ` (${m.number})` : ""} — ${fmtYER(c.balance ?? 0)}`; });
     return { kind: "text", text: `أكثر المشتركين تأخراً بالسداد:\n${lines.join("\n")}\n\nاكتب "اعرض الأول" لفتح كشف حساب صاحب أعلى دين.`, suggestions: ["اعرض الأول", "كم إجمالي الديون؟", "استعلام عن التحصيل اليوم"] };
   }
@@ -235,6 +240,7 @@ function answerQuestionSingle(text: string): AiResponse {
     const top = [...byCustomer.entries()].map(([cid, cons]) => ({ c: s.customers.find((x) => x.id === cid), cons })).filter((x) => x.c).sort((a, b) => b.cons - a.cons).slice(0, 10);
     if (top.length === 0) return { kind: "text", text: `لا توجد قراءات معتمدة في ${range.label}.` };
     setDisambiguation(top.map((x) => x.c!));
+    setContext({ currentRanking: top.map((x) => x.c!), currentTimeRange: range.label });
     const lines = top.map((x, i) => { const m = s.meters.find((mm) => mm.customer_id === x.c!.id); return `${i + 1}. ${x.c!.name}${m ? ` (${m.number})` : ""} — ${fmtNum(x.cons)} م³`; });
     return { kind: "text", text: `أعلى المشتركين استهلاكاً ${range.label}:\n${lines.join("\n")}\n\nاكتب "اعرض الأول" لفتح كشف حساب صاحب أعلى استهلاك.`, suggestions: ["اعرض الأول", "تحليل الفاقد لهذا الشهر", "كم عدد المشتركين؟"] };
   }
@@ -287,7 +293,7 @@ function answerQuestionSingle(text: string): AiResponse {
     const water = perType("water"); const electric = perType("electric"); const alerts: string[] = [];
     if (water.pct > 15) alerts.push(`فاقد المياه ${water.pct.toFixed(1)}% — يُوصى بجولات تفتيش للتسريبات وفحص التوصيلات غير المشروطة في الشبكات عالية الاستهلاك`);
     if (electric.pct > 15) alerts.push(`فاقد الكهرباء ${electric.pct.toFixed(1)}% — يُوصى بمسح ميداني للتوصيلات المخالفة ومعايرة العدادات`);
-    setContext({ currentReport: "loss_analysis" });
+    setContext({ currentReport: "loss_analysis", currentTimeRange: range.label });
     return { kind: "loss_analysis", range: { from: iso(range.start), to: iso(range.end - 1) }, water, electric, alerts };
   }
 
@@ -295,7 +301,7 @@ function answerQuestionSingle(text: string): AiResponse {
   if (has("من دفع", "من لم يدفع", "المدفوع", "غير المدفوع", "المتأخرين", "متأخر", "حالة الدفع")) {
     const paid = s.bills.filter((b) => b.status === "paid").slice(0, 50).map((b) => { const c = s.customers.find((x) => x.id === b.customer_id); return { id: b.id, name: c?.name ?? "—", serial: b.serial, total: b.total }; });
     const unpaid = s.bills.filter((b) => b.status !== "paid").slice(0, 50).map((b) => { const c = s.customers.find((x) => x.id === b.customer_id); return { id: b.id, name: c?.name ?? "—", serial: b.serial, total: b.total, balance: billBalance(b, s.payments) }; });
-    setContext({ currentReport: "payment_status" });
+    setContext({ currentReport: "payment_status", currentTimeRange: null });
     return { kind: "payment_status", paid, unpaid };
   }
 
@@ -309,7 +315,7 @@ function answerQuestionSingle(text: string): AiResponse {
     const days = new Map<string, { cash: number; bank: number; total: number }>();
     payments.forEach((p) => { const d = iso(+new Date(p.date)); const cur = days.get(d) ?? { cash: 0, bank: 0, total: 0 }; if (p.method === "cash") cur.cash += p.amount; else if (p.method === "wallet") cur.bank += p.amount; cur.total += p.amount; days.set(d, cur); });
     const series = [...days.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, v]) => ({ day: day.slice(5), ...v }));
-    setContext({ currentReport: "revenue_report" });
+    setContext({ currentReport: "revenue_report", currentTimeRange: range.label });
     const topDebtor = [...s.customers].sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0))[0];
     return { kind: "revenue_report", range: { from: iso(range.start), to: iso(range.end - 1), label: range.label }, totals: { cash, bank, total, count: payments.length, avg: payments.length ? total / payments.length : 0 }, series, suggestions: topDebtor ? [`أعلى مدين: ${topDebtor.name}`, "أعلى مستهلك", "تحصيل هذا الأسبوع", "تحصيل هذا الشهر"] : ["أعلى مستهلك", "تحصيل هذا الأسبوع", "تحصيل هذا الشهر"] };
   }
