@@ -64,11 +64,17 @@ export type AiResponse =
       totals: { cash: number; bank: number; total: number; count: number; avg: number };
       series: Array<{ day: string; cash: number; bank: number; total: number }>;
       suggestions?: string[];
+    }
+  | {
+      kind: "clarification";
+      text: string;
+      options: Array<{ label: string; query: string }>;
     };
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 function todayRange() { const d = new Date(); const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); return { start, end: start + 86400000, label: "اليوم" }; }
 function monthRange() { const d = new Date(); const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime(); const end = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(); return { start, end, label: "هذا الشهر" }; }
+function yearRange() { const d = new Date(); const start = new Date(d.getFullYear(), 0, 1).getTime(); const end = new Date(d.getFullYear() + 1, 0, 1).getTime(); return { start, end, label: "هذه السنة" }; }
 function weekRange() { const now = new Date(); const start = now.getTime() - 7 * 86400000; return { start, end: now.getTime(), label: "آخر 7 أيام" }; }
 function iso(t: number) { return new Date(t).toISOString().slice(0, 10); }
 
@@ -166,16 +172,29 @@ function answerQuestionSingle(text: string): AiResponse {
   if (has("الثاني", "ثاني واحد") && ctx.lastDisambiguation && ctx.lastDisambiguation.length > 1) { const c = ctx.lastDisambiguation[1]; setContext({ lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
   if (has("الثالث", "ثالث واحد") && ctx.lastDisambiguation && ctx.lastDisambiguation.length > 2) { const c = ctx.lastDisambiguation[2]; setContext({ lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
 
-  // 0b) Context action: "اطبعه"
-  if (has("اطبع", "اطبعه", "طباعة", "اصدار", "اصدر") && has("كشف", "الحساب", "التقرير", "pdf", "PDF")) {
+  // 0b) Context action: "اطبعه" / "طباعة" — print current statement
+  if (has("اطبع", "اطبعه", "طباعة", "اصدار", "اصدر", "اطبعها")) {
     if (ctx.currentCustomer) { const stmt = buildAccountStatement(ctx.currentCustomer); setContext({ currentReport: "account_statement" }); return stmt; }
-    return { kind: "text", text: "لا يوجد كشف حساب نشط حالياً — استعلم عن مشترك أولاً ثم اطلب الطباعة." };
+    return { kind: "clarification", text: "لا يوجد كشف حساب نشط حالياً. ماذا تريد أن تطبع؟", options: [
+      { label: "البحث عن مشترك لطباعة كشف حسابه", query: "استعلام عن مشترك" },
+      { label: "تقرير التحصيل", query: "استعلام عن التحصيل اليوم" },
+      { label: "تحليل الفاقد", query: "تحليل الفاقد لهذا الشهر" },
+    ] };
   }
 
-  // 0c) "افتح حسابه"
-  if (has("افتح حساب", "افتح كشف", "اعرض حسابه", "افتح الكشف")) {
+  // 0c) "افتح حسابه" / "اعرض الحساب" — ambiguous when no customer in context
+  if (has("افتح حساب", "افتح كشف", "اعرض حسابه", "افتح الكشف", "اعرض الحساب", "اعرض حساب")) {
+    const stripped = text.replace(/(?:اعرض|افتح|عرض)\s*(?:الحساب|حساب|كشف|الكشف)\s*/i, "").trim();
+    if (stripped && stripped.length > 2) {
+      const resolved = resolveCustomer(text, false);
+      if ("customer" in resolved) { const meter = s.meters.find((m) => m.customer_id === resolved.customer.id); setCustomerContext(resolved.customer, meter?.number); setContext({ currentReport: "account_statement" }); return buildAccountStatement(resolved.customer); }
+      if ("disambiguation" in resolved) return resolved.disambiguation;
+    }
     if (ctx.currentCustomer) return buildAccountStatement(ctx.currentCustomer);
-    return { kind: "text", text: "لا يوجد مشترك محدد حالياً — استعلم عن مشترك أولاً." };
+    return { kind: "clarification", text: "أي حساب تقصد؟", options: [
+      { label: "البحث باسم المشترك", query: "استعلام عن مشترك" },
+      { label: "البحث برقم العداد", query: "استعلام عن مشترك برقم العداد" },
+    ] };
   }
 
   // 0d) "اعرض اول واحد" after a debt ranking — works with both lastDisambiguation and currentRanking
@@ -186,9 +205,9 @@ function answerQuestionSingle(text: string): AiResponse {
   if (has("اعرض الخامس", "افتح الخامس") && ((ctx.currentRanking && ctx.currentRanking.length > 4) || (ctx.lastDisambiguation && ctx.lastDisambiguation.length > 4))) { const list = ctx.currentRanking ?? ctx.lastDisambiguation!; const c = list[4]; setContext({ currentRanking: null, lastDisambiguation: null }); setCustomerContext(c); return buildAccountStatement(c); }
 
   // 1) Summary stats
-  if (has("عدد المشترك", "كم عدد", "كم المشترك", "عدد المشتركين")) { const count = s.counts.customers || s.customers.length; const active = s.customers.filter((c) => c.status === "active").length; return { kind: "text", text: `عدد المشتركين الإجمالي: ${fmtNum(count)} مشترك، منهم ${fmtNum(active)} نشط.`, suggestions: ["كم إجمالي الديون؟", "ما أكثر المشتركين تأخراً؟", "كم تم تحصيله هذا الشهر؟"] }; }
-  if (has("إجمالي الديون", "إجمالي الدين", "كم الدين", "كل الديون", "مجموع الديون", "إجمالي المتأخرات")) { const totalDebt = s.customers.reduce((a, c) => a + (c.balance ?? 0), 0); const debtors = s.customers.filter((c) => (c.balance ?? 0) > 0).length; return { kind: "text", text: `إجمالي الديون المستحقة: ${fmtYER(totalDebt)} على ${fmtNum(debtors)} مشترك.`, suggestions: ["ما أكثر المشتركين تأخراً؟", "كم عدد المشتركين؟", "كم تم تحصيله هذا الشهر؟"] }; }
-  if (has("أكثر المشتركين تأخر", "الأكثر تأخراً", "الأكثر ديناً", "أكثر المديونين", "أكبر الديون", "أعلى الديون")) {
+  if (has("عدد المشترك", "كم عدد", "كم المشترك", "عدد المشتركين", "كم مشترك", "إجمالي المشتركين", "كم عدد المشتركين")) { const count = s.counts.customers || s.customers.length; const active = s.customers.filter((c) => c.status === "active").length; return { kind: "text", text: `عدد المشتركين الإجمالي: ${fmtNum(count)} مشترك، منهم ${fmtNum(active)} نشط.`, suggestions: ["كم إجمالي الديون؟", "ما أكثر المشتركين تأخراً؟", "كم تم تحصيله هذا الشهر؟"] }; }
+  if (has("إجمالي الديون", "إجمالي الدين", "كم الدين", "كل الديون", "مجموع الديون", "إجمالي المتأخرات", "كم المديونيات", "إجمالي المديونيات", "مجموع المتأخرات", "كم المتأخرات", "إجمالي المطلوب")) { const totalDebt = s.customers.reduce((a, c) => a + (c.balance ?? 0), 0); const debtors = s.customers.filter((c) => (c.balance ?? 0) > 0).length; return { kind: "text", text: `إجمالي الديون المستحقة: ${fmtYER(totalDebt)} على ${fmtNum(debtors)} مشترك.`, suggestions: ["ما أكثر المشتركين تأخراً؟", "كم عدد المشتركين؟", "كم تم تحصيله هذا الشهر؟"] }; }
+  if (has("أكثر المشتركين تأخر", "الأكثر تأخراً", "الأكثر ديناً", "أكثر المديونين", "أكبر الديون", "أعلى الديون", "أكبر المتأخرين", "الأكثر مديونية", "أعلى المتأخرات", "كبار المديونين", "اكبر دين", "اعلى دين")) {
     const top = [...s.customers].filter((c) => (c.balance ?? 0) > 0).sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0)).slice(0, 10);
     if (top.length === 0) return { kind: "text", text: "لا توجد متأخرات حالياً — جميع المشتركين سددوا مستحقاتهم." };
     setDisambiguation(top);
@@ -196,7 +215,7 @@ function answerQuestionSingle(text: string): AiResponse {
     const lines = top.map((c, i) => { const m = s.meters.find((x) => x.customer_id === c.id); return `${i + 1}. ${c.name}${m ? ` (${m.number})` : ""} — ${fmtYER(c.balance ?? 0)}`; });
     return { kind: "text", text: `أكثر المشتركين تأخراً بالسداد:\n${lines.join("\n")}\n\nاكتب "اعرض الأول" لفتح كشف حساب صاحب أعلى دين.`, suggestions: ["اعرض الأول", "كم إجمالي الديون؟", "استعلام عن التحصيل اليوم"] };
   }
-  if (has("إنتاج المياه", "كم إنتاج", "إنتاج اليوم", "كم أنتج", "كم الإنتاج", "كم الضخ", "حجم الإنتاج")) { const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : monthRange(); const produced = s.productionLogs.filter((p) => p.type === "water" && +new Date(p.date) >= range.start && +new Date(p.date) < range.end).reduce((a, b) => a + b.units, 0); const consumed = s.readings.filter((r) => r.status !== "rejected" && +new Date(r.date) >= range.start && +new Date(r.date) < range.end).reduce((a, b) => a + Math.max(0, b.consumption), 0); const loss = Math.max(0, produced - consumed); const pct = produced > 0 ? (loss / produced) * 100 : 0; return { kind: "text", text: `إنتاج المياه ${range.label}: ${fmtNum(Math.round(produced))} م³\nالاستهلاك المُفوتر: ${fmtNum(Math.round(consumed))} م³\nالفاقد: ${fmtNum(Math.round(loss))} م³ (${pct.toFixed(1)}%)`, suggestions: ["تحليل الفاقد لهذا الشهر", "كم عدد المشتركين؟", "كم تم تحصيله هذا الشهر؟"] }; }
+  if (has("إنتاج المياه", "كم إنتاج", "إنتاج اليوم", "كم أنتج", "كم الإنتاج", "كم الضخ", "حجم الإنتاج", "كم ماء", "كم مياه", "حجم الضخ", "إنتاج الماء")) { const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : has("سنة", "السنة") ? yearRange() : monthRange(); const produced = s.productionLogs.filter((p) => p.type === "water" && +new Date(p.date) >= range.start && +new Date(p.date) < range.end).reduce((a, b) => a + b.units, 0); const consumed = s.readings.filter((r) => r.status !== "rejected" && +new Date(r.date) >= range.start && +new Date(r.date) < range.end).reduce((a, b) => a + Math.max(0, b.consumption), 0); const loss = Math.max(0, produced - consumed); const pct = produced > 0 ? (loss / produced) * 100 : 0; return { kind: "text", text: `إنتاج المياه ${range.label}: ${fmtNum(Math.round(produced))} م³\nالاستهلاك المُفوتر: ${fmtNum(Math.round(consumed))} م³\nالفاقد: ${fmtNum(Math.round(loss))} م³ (${pct.toFixed(1)}%)`, suggestions: ["تحليل الفاقد لهذا الشهر", "كم عدد المشتركين؟", "كم تم تحصيله هذا الشهر؟"] }; }
 
   // 1.5) Balance synonyms
   if (has("كم عليه", "كم باقي", "كم المتأخر", "كم المطلوب", "رصيده", "ديونه", "كم المتبقي", "كم المتبقى", "كم بقي", "كم تبقى", "كم مستحق", "هل عليه", "المطلوب", "المستحق", "المديونية", "مديونية", "كم ديونه", "كم رصيده", "كم عليه دين", "دين")) {
@@ -210,31 +229,31 @@ function answerQuestionSingle(text: string): AiResponse {
   }
 
   // 1.6) Last reading / consumption / bill / payment
-  if (has("آخر قراءة", "اخر قراءة", "آخر استهلاك", "اخر استهلاك", "متى آخر قراءة", "متى اخر قراءة")) {
-    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+  if (has("آخر قراءة", "اخر قراءة", "آخر استهلاك", "اخر استهلاك", "متى آخر قراءة", "متى اخر قراءة", "اخر الاستهلاك", "الاستهلاك الاخير")) {
+    if (!ctx.currentCustomer) return { kind: "clarification", text: "هل تقصد آخر قراءة لمشترك محدد؟", options: [{ label: "البحث عن مشترك أولاً", query: "استعلام عن مشترك" }, { label: "إلغاء", query: "استعلام عن مشترك" }] };
     const readings = getCustomerReadings(ctx.currentCustomer.id);
     if (readings.length === 0) return { kind: "text", text: `لا توجد قراءات مسجلة لـ ${ctx.currentCustomer.name}.` };
     const r = readings[0]; const meter = s.meters.find((m) => m.customer_id === ctx.currentCustomer!.id); setContext({ currentReading: r });
     return { kind: "text", text: `آخر قراءة لـ ${ctx.currentCustomer.name}${meter ? ` (${meter.number})` : ""}:\nالتاريخ: ${new Date(r.date).toLocaleDateString("ar-EG")}\nالقراءة: ${fmtNum(r.current)}\nالاستهلاك: ${fmtNum(r.consumption)} م³`, suggestions: ["كم المتبقي عليه؟", "كشف حساب المشترك", "هل دفع آخر فاتورة؟"] };
   }
   if (has("آخر فاتورة", "اخر فاتورة", "متى آخر فاتورة", "متى اخر فاتورة", "كم استهلك هذا الشهر", "كم استهلك")) {
-    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+    if (!ctx.currentCustomer) return { kind: "clarification", text: "هل تقصد آخر فاتورة لمشترك محدد أم آخر فاتورة في النظام؟", options: [{ label: "البحث عن مشترك أولاً", query: "استعلام عن مشترك" }, { label: "آخر فاتورة في النظام", query: "من لم يدفع؟" }] };
     const bills = getCustomerBills(ctx.currentCustomer.id);
     if (bills.length === 0) return { kind: "text", text: `لا توجد فواتير لـ ${ctx.currentCustomer.name}.` };
     const lastBill = bills[bills.length - 1]; const r = s.readings.find((x) => x.id === lastBill.reading_id); setContext({ currentBill: lastBill });
     return { kind: "text", text: `آخر فاتورة لـ ${ctx.currentCustomer.name}:\nرقم الفاتورة: ${lastBill.serial}\nالتاريخ: ${new Date(lastBill.date).toLocaleDateString("ar-EG")}\nالاستهلاك: ${fmtNum(r?.consumption ?? 0)} م³\nالمبلغ: ${fmtYER(lastBill.total)}\nالحالة: ${lastBill.status === "paid" ? "مدفوعة" : lastBill.status === "partial" ? "جزئية" : "غير مدفوعة"}`, suggestions: ["كم المتبقي عليه؟", "كشف حساب المشترك", "آخر دفعة"] };
   }
   // 1.7) Readings history
-  if (has("سجل القراءات", "قراءات", "كل القراءات", "قائمة القراءات", "عرض القراءات")) {
-    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+  if (has("سجل القراءات", "قراءات", "كل القراءات", "قائمة القراءات", "عرض القراءات", "تاريخ القراءات")) {
+    if (!ctx.currentCustomer) return { kind: "clarification", text: "هل تقصد سجل قراءات لمشترك محدد؟", options: [{ label: "البحث عن مشترك أولاً", query: "استعلام عن مشترك" }, { label: "إلغاء", query: "استعلام عن مشترك" }] };
     const stmt = buildAccountStatement(ctx.currentCustomer);
     if (stmt.kind === "account_statement") return { kind: "text", text: `سجل قراءات ${ctx.currentCustomer.name} (${stmt.readings.length} قراءة):\n${stmt.readings.slice(0, 10).map((r) => `${new Date(r.date).toLocaleDateString("ar-EG")}: قراءة ${fmtNum(r.current)} — استهلاك ${fmtNum(r.consumption)} م³`).join("\n")}`, suggestions: ["كشف حساب المشترك", "كم المتبقي عليه؟", "آخر فاتورة"] };
     return { kind: "text", text: `لا توجد قراءات لـ ${ctx.currentCustomer.name}.` };
   }
 
   // 1.8) Top consumer
-  if (has("أعلى مستهلك", "اعلى مستهلك", "أكثر استهلاك", "اكثر استهلاك", "أكبر استهلاك", "اكبر استهلاك", "أكثر المشتركين استهلاك")) {
-    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : monthRange();
+  if (has("أعلى مستهلك", "اعلى مستهلك", "أكثر استهلاك", "اكثر استهلاك", "أكبر استهلاك", "اكبر استهلاك", "أكثر المشتركين استهلاك", "الأكثر استهلاكاً", "أعلى استهلاك", "اعلى استهلاك")) {
+    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : has("سنة", "السنة") ? yearRange() : monthRange();
     const byCustomer = new Map<number, number>();
     s.readings.filter((r) => r.status !== "rejected" && +new Date(r.date) >= range.start && +new Date(r.date) < range.end).forEach((r) => { const m = s.meters.find((x) => x.id === r.meter_id); if (m) byCustomer.set(m.customer_id, (byCustomer.get(m.customer_id) ?? 0) + r.consumption); });
     const top = [...byCustomer.entries()].map(([cid, cons]) => ({ c: s.customers.find((x) => x.id === cid), cons })).filter((x) => x.c).sort((a, b) => b.cons - a.cons).slice(0, 10);
@@ -246,23 +265,23 @@ function answerQuestionSingle(text: string): AiResponse {
   }
 
   // 1.9) 12-month consumption comparison
-  if (has("مقارنة", "قارن", "آخر 12 شهر", "12 شهر", "استهلاك السنة", "مقارنة استهلاك", "قارن استهلاكه")) {
-    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+  if (has("مقارنة", "قارن", "آخر 12 شهر", "12 شهر", "استهلاك السنة", "مقارنة استهلاك", "قارن استهلاكه", "قارن بالشهر الماضي", "مقارنة بالشهر الماضي", "مقارنة الشهور")) {
+    if (!ctx.currentCustomer) return { kind: "clarification", text: "هل تقصد مقارنة استهلاك لمشترك محدد؟", options: [{ label: "البحث عن مشترك أولاً", query: "استعلام عن مشترك" }, { label: "إلغاء", query: "استعلام عن مشترك" }] };
     const stmt = buildAccountStatement(ctx.currentCustomer);
     if (stmt.kind === "account_statement" && stmt.monthlyConsumption.length > 0) return { kind: "text", text: `مقارنة استهلاك ${ctx.currentCustomer.name} — آخر ${stmt.monthlyConsumption.length} شهر:\n${stmt.monthlyConsumption.map((m) => `${m.month}: ${fmtNum(m.consumption)} م³`).join("\n")}`, suggestions: ["كشف حساب المشترك", "آخر قراءة؟", "طباعة كشف الحساب"] };
     return { kind: "text", text: `لا توجد بيانات كافية لمقارنة استهلاك ${ctx.currentCustomer.name}.` };
   }
 
-  if (has("آخر دفعة", "اخر دفعة", "آخر تحصيل", "اخر تحصيل", "متى دفع", "متى آخر دفعة", "هل دفع", "دفع آخر")) {
-    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+  if (has("آخر دفعة", "اخر دفعة", "آخر تحصيل", "اخر تحصيل", "متى دفع", "متى آخر دفعة", "دفع آخر", "متى دفع آخر مرة")) {
+    if (!ctx.currentCustomer) return { kind: "clarification", text: "هل تقصد آخر دفعة لمشترك محدد؟", options: [{ label: "البحث عن مشترك أولاً", query: "استعلام عن مشترك" }, { label: "تقرير التحصيل العام", query: "استعلام عن التحصيل اليوم" }] };
     const bills = getCustomerBills(ctx.currentCustomer.id);
     const payments = getCustomerPayments(ctx.currentCustomer.id, bills).filter((p) => p.status === "approved").sort((a, b) => +new Date(b.date) - +new Date(a.date));
     if (payments.length === 0) return { kind: "text", text: `لا توجد دفعات معتمدة لـ ${ctx.currentCustomer.name}.` };
     const p = payments[0];
     return { kind: "text", text: `آخر دفعة لـ ${ctx.currentCustomer.name}:\nالتاريخ: ${new Date(p.date).toLocaleDateString("ar-EG")}\nالمبلغ: ${fmtYER(p.amount)}\nالطريقة: ${p.method === "cash" ? "نقدي" : p.method === "wallet" ? "الكريمي" : "تحويل"}`, suggestions: ["كم المتبقي عليه؟", "كشف حساب المشترك", "آخر فاتورة"] };
   }
-  if (has("هل دفع", "هل سدد", "هل دفع آخر فاتورة")) {
-    if (!ctx.currentCustomer) return { kind: "suggestions", text: "حدد المشترك أولاً — اكتب اسمه أو رقم عداده:", suggestions: s.customers.slice(0, 6).map((c) => `استعلام عن مشترك ${c.name}`) };
+  if (has("هل دفع", "هل سدد", "هل دفع آخر فاتورة", "هل سدد آخر فاتورة", "هل دفع الفاتورة")) {
+    if (!ctx.currentCustomer) return { kind: "clarification", text: "هل تقصد مشترك محدد؟", options: [{ label: "البحث عن مشترك أولاً", query: "استعلام عن مشترك" }, { label: "تقرير المدفوع وغير المدفوع", query: "من دفع ومن لم يدفع؟" }] };
     const bills = getCustomerBills(ctx.currentCustomer.id);
     if (bills.length === 0) return { kind: "text", text: `لا توجد فواتير لـ ${ctx.currentCustomer.name}.` };
     const lastBill = bills[bills.length - 1];
@@ -287,8 +306,8 @@ function answerQuestionSingle(text: string): AiResponse {
   }
 
   // 4) Loss analysis
-  if (has("فاقد", "تسرب", "خسائر", "تحليل الفاقد")) {
-    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : monthRange();
+  if (has("فاقد", "تسرب", "خسائر", "تحليل الفاقد", "هدر", "هدر المياه", "فاقد المياه", "فاقد الكهرباء", "نسبة الفاقد", "كم الفاقد", "كم نسبة الفاقد", "تحليل الهدر")) {
+    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : has("سنة", "السنة") ? yearRange() : monthRange();
     const perType = (t: "water" | "electric") => { const produced = s.productionLogs.filter((p) => p.type === t && +new Date(p.date) >= range.start && +new Date(p.date) < range.end).reduce((a, b) => a + b.units, 0); const meterIds = new Set(s.meters.filter((m) => m.type === t).map((m) => m.id)); const consumed = s.readings.filter((r) => meterIds.has(r.meter_id) && r.status !== "rejected" && +new Date(r.date) >= range.start && +new Date(r.date) < range.end).reduce((a, b) => a + b.consumption, 0); const loss = Math.max(0, produced - consumed); const pct = produced > 0 ? (loss / produced) * 100 : 0; return { produced, consumed, loss, pct }; };
     const water = perType("water"); const electric = perType("electric"); const alerts: string[] = [];
     if (water.pct > 15) alerts.push(`فاقد المياه ${water.pct.toFixed(1)}% — يُوصى بجولات تفتيش للتسريبات وفحص التوصيلات غير المشروطة في الشبكات عالية الاستهلاك`);
@@ -298,7 +317,7 @@ function answerQuestionSingle(text: string): AiResponse {
   }
 
   // 5) Payment status
-  if (has("من دفع", "من لم يدفع", "المدفوع", "غير المدفوع", "المتأخرين", "متأخر", "حالة الدفع")) {
+  if (has("من دفع", "من لم يدفع", "المدفوع", "غير المدفوع", "المتأخرين", "متأخر", "حالة الدفع", "من سدد", "من لم يسدد", "الفواتير المدفوعة", "الفواتير غير المدفوعة", "الفاتورات المتأخرة", "من تأخر")) {
     const paid = s.bills.filter((b) => b.status === "paid").slice(0, 50).map((b) => { const c = s.customers.find((x) => x.id === b.customer_id); return { id: b.id, name: c?.name ?? "—", serial: b.serial, total: b.total }; });
     const unpaid = s.bills.filter((b) => b.status !== "paid").slice(0, 50).map((b) => { const c = s.customers.find((x) => x.id === b.customer_id); return { id: b.id, name: c?.name ?? "—", serial: b.serial, total: b.total, balance: billBalance(b, s.payments) }; });
     setContext({ currentReport: "payment_status", currentTimeRange: null });
@@ -306,8 +325,8 @@ function answerQuestionSingle(text: string): AiResponse {
   }
 
   // 6) Revenue report
-  if (has("تحصيل", "محصل", "ايراد", "إيراد", "دخل")) {
-    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : monthRange();
+  if (has("تحصيل", "محصل", "ايراد", "إيراد", "دخل", "تحصيلات", "المحصيل", "التحصيلات", "إيرادات", "ايرادات", "كم تم تحصيله", "كم محصّل", "حصيلة")) {
+    const range = has("اليوم") ? todayRange() : has("أسبوع", "اسبوع") ? weekRange() : has("سنة", "السنة") ? yearRange() : monthRange();
     const payments = s.payments.filter((p) => p.status === "approved" && +new Date(p.date) >= range.start && +new Date(p.date) < range.end);
     const cash = payments.filter((p) => p.method === "cash").reduce((a, b) => a + b.amount, 0);
     const bank = payments.filter((p) => p.method === "wallet").reduce((a, b) => a + b.amount, 0);
